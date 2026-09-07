@@ -25,6 +25,7 @@ if not API_FOOTBALL_KEY:
 
 
 def get_live_matches():
+    """Fetch all currently live football fixtures from API-Football."""
     response = requests.get(
         API_URL,
         headers={"x-apisports-key": API_FOOTBALL_KEY},
@@ -41,14 +42,12 @@ def get_live_matches():
 
 
 def match_status(status):
-    short = status.get("short", "LIVE")
+    short = status.get("short") or "LIVE"
     elapsed = status.get("elapsed")
 
     if short in {"HT", "INT"}:
         return "HT"
-    if short in {"ET", "BT"} and elapsed is not None:
-        return f"{elapsed}'"
-    if elapsed is not None and short not in {"P", "SUSP", "INT", "ABD", "CANC", "PST"}:
+    if elapsed is not None and short not in {"P", "SUSP", "ABD", "CANC", "PST"}:
         return f"{elapsed}'"
     return short
 
@@ -61,40 +60,31 @@ def format_match(match):
 
     home = html.escape(teams.get("home", {}).get("name") or "Home")
     away = html.escape(teams.get("away", {}).get("name") or "Away")
-    league_name = html.escape(league.get("name") or "")
-    country = html.escape(league.get("country") or "")
+    competition = html.escape(league.get("name") or "")
 
     home_score = goals.get("home")
     away_score = goals.get("away")
     home_score = 0 if home_score is None else home_score
     away_score = 0 if away_score is None else away_score
 
-    status = match_status(fixture.get("status", {}))
-    competition = league_name
-    if country and league_name:
-        competition = f"{league_name} • {country}"
+    status = html.escape(match_status(fixture.get("status", {})))
 
     lines = [f"⚽ <b>{home}  {home_score} - {away_score}  {away}</b>"]
     if competition:
         lines.append(competition)
-    lines.append(f"<b>{html.escape(status)}</b>")
+    lines.append(f"<b>{status}</b>")
     return "\n".join(lines)
 
 
 def format_matches(matches):
     if not matches:
-        return (
-            "⚽ <b>LIVE MATCHES</b>\n\n"
-            "No live matches right now.\n"
-            "Check again later for new games."
-        )
+        return "⚽ <b>LIVE MATCHES</b>\n\nNo live matches right now."
 
-    # Keep the display compact and ordered by competition, then kickoff time.
     matches = sorted(
         matches,
-        key=lambda m: (
-            (m.get("league", {}).get("name") or "").lower(),
-            m.get("fixture", {}).get("date") or "",
+        key=lambda match: (
+            (match.get("league", {}).get("name") or "").lower(),
+            match.get("fixture", {}).get("date") or "",
         ),
     )
 
@@ -105,11 +95,11 @@ def format_matches(matches):
 
 def keyboard():
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🔄 Refresh scores", callback_data="live")]]
+        [[InlineKeyboardButton("🔄 Refresh", callback_data="live")]]
     )
 
 
-def updated_text(text):
+def add_update_time(text):
     now = datetime.now(timezone.utc).strftime("%H:%M UTC")
     return f"{text}\n\n<i>Updated {now}</i>"
 
@@ -117,8 +107,8 @@ def updated_text(text):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (
         "<b>Match Bot</b>\n\n"
-        "Check live football matches and current scorelines directly in Telegram.\n\n"
-        "Tap below to see what's happening now."
+        "See live football matches and current scorelines directly in Telegram.\n\n"
+        "Tap the button below to check the latest matches."
     )
     await update.message.reply_text(
         message,
@@ -130,7 +120,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         matches = get_live_matches()
-        text = updated_text(format_matches(matches))
+        text = add_update_time(format_matches(matches))
     except requests.RequestException:
         logger.exception("Football API request failed")
         text = (
@@ -138,7 +128,7 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Please try again shortly."
         )
     except Exception:
-        logger.exception("Unexpected error while loading matches")
+        logger.exception("Unexpected error while loading live matches")
         text = (
             "⚠️ <b>We couldn't load the live matches right now.</b>\n\n"
             "Please try again shortly."
