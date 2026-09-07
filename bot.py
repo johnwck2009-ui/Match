@@ -15,59 +15,98 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
-API_URL = "https://v3.football.api-sports.io/fixtures"
+SPORTSCORE_URL = "https://sportscore.com/api/widget/matches/"
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-if not API_FOOTBALL_KEY:
-    raise RuntimeError("API_FOOTBALL_KEY is not set")
 
 
 def get_live_matches():
-    """Fetch all currently live football fixtures from API-Football."""
+    """Fetch current football matches from SportScore's public API."""
     response = requests.get(
-        API_URL,
-        headers={"x-apisports-key": API_FOOTBALL_KEY},
-        params={"live": "all"},
+        SPORTSCORE_URL,
+        params={"sport": "football", "limit": 50},
         timeout=20,
     )
     response.raise_for_status()
 
     data = response.json()
-    if data.get("errors"):
-        raise RuntimeError(f"API-Football error: {data['errors']}")
+    if isinstance(data, dict):
+        matches = data.get("matches") or data.get("data") or data.get("results") or []
+    else:
+        matches = data
 
-    return data.get("response", [])
+    if not isinstance(matches, list):
+        raise RuntimeError("Unexpected SportScore response format")
+
+    live_matches = []
+    for match in matches:
+        status = str(
+            match.get("status")
+            or match.get("state")
+            or match.get("matchStatus")
+            or ""
+        ).lower()
+
+        if any(word in status for word in ("live", "inplay", "in-play", "playing", "halftime")):
+            live_matches.append(match)
+
+    return live_matches
 
 
-def match_status(status):
-    short = status.get("short") or "LIVE"
-    elapsed = status.get("elapsed")
+def value(obj, *keys, default=None):
+    if not isinstance(obj, dict):
+        return default
+    for key in keys:
+        if obj.get(key) is not None:
+            return obj[key]
+    return default
 
-    if short in {"HT", "INT"}:
-        return "HT"
-    if elapsed is not None and short not in {"P", "SUSP", "ABD", "CANC", "PST"}:
-        return f"{elapsed}'"
-    return short
+
+def team_name(match, side):
+    teams = match.get("teams") or {}
+    team = teams.get(side) or match.get(f"{side}Team") or {}
+    if isinstance(team, str):
+        return team
+    return value(team, "name", "title", default=side.title())
+
+
+def score_value(match, side):
+    score = match.get("score") or match.get("scores") or {}
+    value_from_score = value(score, side, f"{side}Score", default=None)
+    if isinstance(value_from_score, dict):
+        value_from_score = value(value_from_score, "current", "value", "goals", default=None)
+    if value_from_score is None:
+        value_from_score = value(match, f"{side}Score", default=0)
+    return 0 if value_from_score is None else value_from_score
+
+
+def league_name(match):
+    league = match.get("league") or match.get("competition") or {}
+    if isinstance(league, str):
+        return league
+    return value(league, "name", "title", default="")
+
+
+def match_status(match):
+    status = value(match, "status", "state", "matchStatus", default="LIVE")
+    if isinstance(status, dict):
+        status = value(status, "name", "short", "type", default="LIVE")
+    status = str(status).replace("_", " ").title()
+
+    minute = value(match, "minute", "elapsed", "matchMinute", default=None)
+    if minute is not None and str(minute).isdigit():
+        return f"{minute}'"
+    return status
 
 
 def format_match(match):
-    fixture = match.get("fixture", {})
-    teams = match.get("teams", {})
-    goals = match.get("goals", {})
-    league = match.get("league", {})
-
-    home = html.escape(teams.get("home", {}).get("name") or "Home")
-    away = html.escape(teams.get("away", {}).get("name") or "Away")
-    competition = html.escape(league.get("name") or "")
-
-    home_score = goals.get("home")
-    away_score = goals.get("away")
-    home_score = 0 if home_score is None else home_score
-    away_score = 0 if away_score is None else away_score
-
-    status = html.escape(match_status(fixture.get("status", {})))
+    home = html.escape(str(team_name(match, "home")))
+    away = html.escape(str(team_name(match, "away")))
+    competition = html.escape(str(league_name(match)))
+    home_score = score_value(match, "home")
+    away_score = score_value(match, "away")
+    status = html.escape(match_status(match))
 
     lines = [f"⚽ <b>{home}  {home_score} - {away_score}  {away}</b>"]
     if competition:
@@ -79,14 +118,6 @@ def format_match(match):
 def format_matches(matches):
     if not matches:
         return "⚽ <b>LIVE MATCHES</b>\n\nNo live matches right now."
-
-    matches = sorted(
-        matches,
-        key=lambda match: (
-            (match.get("league", {}).get("name") or "").lower(),
-            match.get("fixture", {}).get("date") or "",
-        ),
-    )
 
     blocks = ["⚽ <b>LIVE MATCHES</b>", ""]
     blocks.extend(format_match(match) for match in matches)
@@ -122,7 +153,7 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
         matches = get_live_matches()
         text = add_update_time(format_matches(matches))
     except requests.RequestException:
-        logger.exception("Football API request failed")
+        logger.exception("SportScore request failed")
         text = (
             "⚠️ <b>Live scores are temporarily unavailable.</b>\n\n"
             "Please try again shortly."
