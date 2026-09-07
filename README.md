@@ -4,18 +4,17 @@ A simple Telegram utility bot for checking live football matches and current sco
 
 ## Features
 
-- Live football matches from supported competitions
+- Live football matches
 - Current scorelines
-- Match minute/status
-- League/competition name
+- Match minute/status when available
+- League/competition name when available
 - Refresh button for updated scores
 
 ## Setup
 
-Set these environment variables:
+Set this environment variable:
 
 - `BOT_TOKEN` — Telegram bot token from BotFather
-- `API_FOOTBALL_KEY` — API-Football API key
 
 Install dependencies:
 
@@ -29,4 +28,4 @@ Run:
 python bot.py
 ```
 
-The bot uses API-Football's live fixtures endpoint (`live=all`). Keep API credentials in environment variables and never commit them to the repository.
+The bot uses SportScore's public football endpoint for live match data. No sports API key is required.
